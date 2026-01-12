@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wasm PDF Watermark Remover Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    
+    <style>
+        .drop-active { border-color: #3b82f6; background-color: #eff6ff; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-white p-8 rounded-xl shadow-lg max-w-lg w-full">
+        <h1 class="text-2xl font-bold mb-2 text-gray-800">PDF Watermark Remover</h1>
+        <p class="text-sm text-gray-500 mb-6">Powered by WebAssembly & Python</p>
+
+        <div id="console" class="bg-gray-900 text-green-400 font-mono text-xs p-4 rounded mb-6 h-40 overflow-y-auto">
+            > Initializing Python environment...<br>
+        </div>
+
+        <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center transition-colors cursor-pointer hover:bg-gray-50">
+            <div id="loader" class="hidden animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p id="drop-text" class="text-gray-600">Drag & Drop your PDF here <br><span class="text-sm text-blue-500 font-semibold">or Click to Upload</span></p>
+            
+            <input type="file" id="file-input" class="hidden" accept="application/pdf">
+        </div>
+
+        <div id="download-section" class="hidden mt-6 text-center">
+            <a id="download-link" href="#" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded transition">
+                Download output.pdf
+            </a>
+            <p class="text-xs text-gray-400 mt-2 cursor-pointer hover:underline" onclick="resetUI()">Process another file</p>
+        </div>
+    </div>
+
+    <script>
+        let pyodide = null;
+        const consoleDiv = document.getElementById('console');
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const dropText = document.getElementById('drop-text');
+        const loader = document.getElementById('loader');
+        const downloadSection = document.getElementById('download-section');
+        const downloadLink = document.getElementById('download-link');
+
+        function log(msg) {
+            consoleDiv.innerHTML += `> ${msg}<br>`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        // 1. Initialize Pyodide
+        async function main() {
+            try {
+                pyodide = await loadPyodide();
+                log("Python Loaded.");
+                
+                log("Installing dependencies (micropip, pypdf)...");
+                await pyodide.loadPackage("micropip");
+                const micropip = pyodide.pyimport("micropip");
+                await micropip.install("pypdf");
+                log("Dependencies installed.");
+
+                // Create placeholder remove.py script
+                const pythonScript = `
+import sys
+from pypdf import PdfReader, PdfWriter
+
+def remove_watermark(input_path, output_path):
+    print(f"Processing {input_path}...")
+    try:
+        reader = PdfReader(input_path)
+        writer = PdfWriter()
+
+        # Simple pass-through logic (often cleans metadata/simple corruption)
+        # To actually remove visible watermarks, you need logic to filter 'page.images'
+        # or content streams.
+        for n in range(len(reader.pages)):
+            page = reader.pages[n]
+            del page["/Contents"][-1]
+            writer.add_page(page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+        print(f"Successfully wrote {output_path}")
+    except Exception as e:
+        print(f"Python Error: {e}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python remove.py input output")
+    else:
+        remove_watermark(sys.argv[1], sys.argv[2])
+`;
+                pyodide.FS.writeFile("remove.py", pythonScript);
+                log("Script 'remove.py' ready.");
+                dropZone.classList.add("border-blue-300");
+
+            } catch (err) {
+                log("Error: " + err);
+            }
+        }
+        main();
+
+        // 2. Shared File Processing Logic
+        async function processFile(file) {
+            if (!pyodide) {
+                log("Wait for Python to initialize...");
+                return;
+            }
+
+            if (file.type !== "application/pdf") {
+                log("Error: Please select a valid PDF file.");
+                return;
+            }
+
+            // UI Updates
+            dropText.innerHTML = "Processing <b>" + file.name + "</b>...";
+            loader.classList.remove('hidden');
+            downloadSection.classList.add('hidden');
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const data = new Uint8Array(event.target.result);
+                
+                // Write input.pdf
+                pyodide.FS.writeFile('input.pdf', data);
+                log(`File saved to VFS as input.pdf`);
+
+                try {
+                    log(`Running: python remove.py input.pdf output.pdf`);
+                    
+                    // Run Python Script
+                    await pyodide.runPythonAsync(`
+                        import sys
+                        sys.argv = ['remove.py', 'input.pdf', 'output.pdf']
+                        exec(open("remove.py").read())
+                    `);
+
+                    // Check if output exists
+                    if (pyodide.FS.analyzePath('output.pdf').exists) {
+                        const content = pyodide.FS.readFile('output.pdf');
+                        const blob = new Blob([content], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
+                        
+                        downloadLink.href = url;
+                        downloadLink.download = "output.pdf";
+                        
+                        log("Success! Download ready.");
+                        downloadSection.classList.remove('hidden');
+                        dropText.innerHTML = "Drag & Drop or Click again";
+                    } else {
+                        log("Error: Output file was not created by the script.");
+                        dropText.innerText = "Processing failed";
+                    }
+                    
+                } catch (pyError) {
+                    log("Python Runtime Error: " + pyError);
+                    dropText.innerText = "Error occurred";
+                } finally {
+                    loader.classList.add('hidden');
+                    // Clear input so same file can be selected again if needed
+                    fileInput.value = ''; 
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // 3. Event Listeners
+
+        // -- Click Handling --
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                processFile(e.target.files[0]);
+            }
+        });
+
+        // -- Drag & Drop Handling --
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('drop-active');
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drop-active');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drop-active');
+
+            if (e.dataTransfer.files.length > 0) {
+                processFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Helper to reset UI
+        window.resetUI = function() {
+            downloadSection.classList.add('hidden');
+            dropText.innerHTML = "Drag & Drop your PDF here <br><span class='text-sm text-blue-500 font-semibold'>or Click to Upload</span>";
+            log("Ready for new file.");
+        }
+
+    </script>
+</body>
+</html>

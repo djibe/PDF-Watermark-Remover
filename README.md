@@ -4,7 +4,9 @@ Remove PDF watermarks from academic papers using [pypdf](https://github.com/py-p
 
 ## Setup
 
-Install the pypdf package:
+Just run the script in your browser: open `index.html`
+
+Or install the pypdf package:
 
 ```bash
 pip3 install pypdf
