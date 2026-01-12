@@ -10,10 +10,17 @@ Install the pypdf package:
 pip3 install pypdf
 ```
 
+Or [install UV](https://docs.astral.sh/uv/getting-started/installation/). No `.venv` or `pip install` needed.
+
 ## Usage
 
 ```bash
 python3 remove.py input.pdf output.pdf
+```
+
+With UV
+```bash
+uv run remove.py input.pdf output.pdf
 ```
 
 ## Licence
